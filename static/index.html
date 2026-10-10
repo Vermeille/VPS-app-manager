@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>PG App Manager</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand"><span class="brand-icon">▦</span><span>PG<span class="muted-brand">/</span>Manager</span></div>
+      <span class="topbar-label"><span class="status-dot"></span> PostgreSQL <span class="divider-dot">·</span> <span id="coolify-state">Coolify checking…</span></span>
+    </header>
+
+    <main>
+      <div class="hero">
+        <div>
+          <div class="eyebrow">DATABASE OPERATIONS</div>
+          <h1>Applications <span class="heading-accent">& databases.</span></h1>
+          <p>Create isolated PostgreSQL databases, then connect them to your Coolify applications with a click.</p>
+        </div>
+        <div class="count-box"><span class="count" id="app-count">—</span><span class="count-label">managed apps</span></div>
+      </div>
+
+      <section class="panel new-app" aria-labelledby="new-app-heading">
+        <div class="section-heading">
+          <div><div class="section-kicker">01 / PROVISION</div><h2 id="new-app-heading">Create a new app</h2></div>
+          <span class="pill">Database + role + secret</span>
+        </div>
+        <form id="create-form" class="create-form">
+          <label for="app-name">Application name</label>
+          <div class="create-controls">
+            <div class="input-group"><span class="input-prefix">app /</span><input type="text" id="app-name" placeholder="bookflix" required maxlength="40" pattern="[a-z][a-z0-9-]*" autocomplete="off" spellcheck="false" aria-describedby="app-hint"></div>
+            <button type="submit" class="primary-btn" id="create-button"><span>+</span> Create app</button>
+          </div>
+          <div id="app-hint" class="hint">Lowercase letters, numbers, and hyphens. Generates <code>bookflix_db</code> and <code>bookflix_user</code>.</div>
+          <div class="integration-group">
+            <label for="new-coolify-app">Coolify project / environment / application <span class="optional-label">optional</span></label>
+            <select id="new-coolify-app" disabled><option value="">Standalone database (no Coolify connection)</option></select>
+            <label for="new-env-key" class="env-label">Environment variable to inject</label>
+            <input type="text" id="new-env-key" value="DATABASE_URL" required maxlength="128" pattern="[A-Za-z_][A-Za-z0-9_.]*" spellcheck="false" autocomplete="off" aria-describedby="env-key-hint">
+            <div class="hint" id="env-key-hint">Change this for apps expecting <code>DB_URL</code>, <code>POSTGRES_DSN</code>, etc. No change is made to project-wide or environment-wide shared variables.</div>
+            <label for="new-redeploy" class="checkline"><input type="checkbox" id="new-redeploy" checked> Redeploy the selected app after injecting the variable</label>
+            <label for="new-replace" class="checkline"><input type="checkbox" id="new-replace"> Allow replacing an existing variable with that name in the selected app</label>
+            <div class="hint" id="coolify-hint">Coolify integration is optional. Configure its API token to enable this selection.</div>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel managed" aria-labelledby="managed-heading">
+        <div class="section-heading">
+          <div><div class="section-kicker">02 / MANAGEMENT</div><h2 id="managed-heading">Your applications</h2></div>
+          <button type="button" class="subtle-btn" id="refresh">↻ Refresh</button>
+        </div>
+        <div id="empty" class="empty" hidden><div class="empty-icon">▤</div>No apps yet. Create one above.</div>
+        <div id="app-list" class="app-list" aria-live="polite"></div>
+      </section>
+      <footer>Credentials are encrypted at rest. Coolify API access runs server-side; its token is never sent to your browser.</footer>
+    </main>
+  </div>
+
+  <dialog id="credentials-dialog" aria-labelledby="credentials-title">
+    <div class="modal-head"><div><div class="section-kicker">CONNECTION DETAILS</div><h2 id="credentials-title">App credentials</h2></div><button type="button" class="icon-btn" id="modal-close" aria-label="Close">✕</button></div>
+    <p class="modal-subtitle" id="credentials-description"></p>
+    <div class="fields" id="credential-fields"></div>
+    <div class="secret-warning">Treat these as secrets. Rotate the password if it has been exposed.</div>
+    <div class="modal-actions"><button type="button" class="primary-btn" id="copy-url">Copy DATABASE_URL</button><button type="button" class="subtle-btn" id="done">Done</button></div>
+  </dialog>
+  <dialog id="connect-dialog" aria-labelledby="connect-title">
+    <div class="modal-head"><div><div class="section-kicker">COOLIFY INTEGRATION</div><h2 id="connect-title">Connect an application</h2></div><button type="button" class="icon-btn" id="connect-close" aria-label="Close">✕</button></div>
+    <p class="modal-subtitle" id="connect-description"></p>
+    <form id="connect-form" class="connect-form">
+      <label for="connect-app">Coolify project / environment / application</label>
+      <select id="connect-app" required></select>
+      <label for="connect-key">Environment variable</label>
+      <input id="connect-key" value="DATABASE_URL" required maxlength="128" pattern="[A-Za-z_][A-Za-z0-9_.]*" spellcheck="false">
+      <label class="checkline"><input type="checkbox" id="connect-replace"> Allow replacing an existing variable</label>
+      <label class="checkline"><input type="checkbox" id="connect-redeploy" checked> Redeploy after saving</label>
+      <div class="secret-warning">This gives the selected Coolify app access to this database. Coolify environment variables must be on a network that can reach the PostgreSQL host.</div>
+      <div class="modal-actions"><button type="button" class="subtle-btn" id="connect-cancel">Cancel</button><button type="submit" class="primary-btn" id="connect-submit">Save to Coolify</button></div>
+    </form>
+  </dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
