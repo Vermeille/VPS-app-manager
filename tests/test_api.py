@@ -8,8 +8,6 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 os.environ.setdefault("POSTGRES_ADMIN_DSN", "postgresql://postgres:secret@db/postgres")
-os.environ.setdefault("ADMIN_USERNAME", "admin")
-os.environ.setdefault("ADMIN_PASSWORD", "test-password")
 os.environ.setdefault("APP_DB_HOST", "pg-internal")
 os.environ.setdefault("FERNET_KEY", Fernet.generate_key().decode())
 
@@ -30,12 +28,14 @@ def test_url_encodes_password():
     )
 
 
-def test_http_authentication_required():
+def test_authentication_delegated_to_coolify_proxy():
+    # The FastAPI application deliberately has no authentication layer.
+    # In production the Coolify reverse proxy MUST require authentication.
     client = TestClient(app)
-    for path in ["/", "/app.js", "/style.css", "/api/apps"]:
+    for path in ["/", "/app.js", "/style.css", "/api/coolify/status"]:
         response = client.get(path)
-        assert response.status_code == 401, (path, response.text)
-        assert response.headers["WWW-Authenticate"].startswith("Basic")
+        assert response.status_code == 200, (path, response.text)
+        assert "WWW-Authenticate" not in response.headers
 
 
 def test_health_unprotected():
@@ -49,7 +49,6 @@ def test_post_body_validation_before_db_connect():
     client = TestClient(app)
     response = client.post(
         "/api/apps",
-        auth=("admin", "test-password"),
         json={"name": "INVALID!"},
     )
     assert response.status_code == 422
@@ -59,7 +58,6 @@ def test_same_origin_protection():
     client = TestClient(app, base_url="https://db.example.com")
     response = client.post(
         "/api/apps",
-        auth=("admin", "test-password"),
         headers={"Origin": "https://evil.example.com"},
         json={"name": "bookflix"},
     )

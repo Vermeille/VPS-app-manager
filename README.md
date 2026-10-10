@@ -21,21 +21,19 @@ Not included: creating new Coolify app resources, cloning Git repositories, conn
 ## Install on Coolify
 
 1. Upload this directory into a Git repository, then create a Coolify **Application** from it using the included `Dockerfile`. Exposed port: **8000**.
-2. Assign an HTTPS domain **and restrict access to your admin/VPN network**. This is a privileged administrator-only tool, not a public multi-user service.
+2. Assign an HTTPS domain and enable **Coolify HTTP Basic Authentication** for this application **before exposing it**. Prefer adding VPN/IP restrictions too. This is a privileged administrator-only tool, not a public multi-user service.
 3. Ensure the manager can connect to your **shared PostgreSQL instance**. Set **Connect to Predefined Network** or attach an appropriate private Docker network, and use the PostgreSQL resource's internal host.
 4. Configure PostgreSQL/admin environment variables below. Keep secrets **runtime-only**, not Docker build arguments.
 5. Optionally create an API token in Coolify under **Keys & Tokens → API tokens** with application read/write and deployment permissions. Add `COOLIFY_API_URL` and `COOLIFY_API_TOKEN` as runtime environment variables to PG App Manager.
-6. Deploy PG App Manager, log in with `ADMIN_USERNAME` and `ADMIN_PASSWORD`, and select the target app in the **Connect to Coolify** selector when creating a database.
+6. Deploy PG App Manager, authenticate using the **Coolify-managed HTTP Basic credentials**, and select the target app in the **Connect to Coolify** selector when creating a database.
 
-**Authentication:** PG App Manager already implements HTTP Basic for the dashboard and every management API endpoint (except `/health`). Configure a strong, unique `ADMIN_PASSWORD` over HTTPS and restrict ingress with VPN or an IP allowlist. Do **not** add an independent Coolify/Traefik Basic Auth password on top and expect two separate Basic logins to work: both layers use the same `Authorization` header. If you enable Coolify Basic Auth as an extra proxy check, use matching credentials and leave forwarding enabled; otherwise FastAPI will reject requests. For true SSO use a separately integrated identity proxy, and keep the application-side authorization model in mind.
+**Authentication is enforced by Coolify, not FastAPI.** This application has **no built-in login or API authentication**. Enable **HTTP Basic Authentication** on the Coolify application / Traefik route *before* giving it a public domain, and protect **all paths**, including `/api/*`. Prefer HTTPS plus VPN/IP restrictions. Do not expose port `8000` on the host or through any other unauthenticated route. Other containers on a shared Docker network may be able to bypass the reverse proxy and call the unauthenticated API directly; restrict network access accordingly. If you control the Traefik BasicAuth middleware, `removeHeader: true` prevents forwarding the reusable Basic credentials to FastAPI. This proxy is your **only** authentication boundary.
 
 ### Environment variables
 
 | Variable | Required | Description |
 |---|---|---|
 | `POSTGRES_ADMIN_DSN` | Yes | PostgreSQL admin connection to the database where the registry will live, usually `postgres` |
-| `ADMIN_USERNAME` | No | HTTP Basic dashboard username; defaults to `admin` |
-| `ADMIN_PASSWORD` | Yes | Long, random password for dashboard/API access |
 | `FERNET_KEY` | Yes | Stable Fernet key used to encrypt registry passwords |
 | `APP_DB_HOST` | Yes | **PostgreSQL hostname reachable from the Coolify application containers**, not just from PG App Manager |
 | `APP_DB_PORT` | No | Defaults to `5432` |
@@ -97,7 +95,7 @@ Likewise, PG App Manager's container must be able to reach the configured Coolif
 
 ## API
 
-All routes except `/health` require HTTP Basic authentication.
+The FastAPI service does **not** authenticate requests. All dashboard and API routes must be protected by Coolify/Traefik HTTP Basic Authentication at the reverse proxy; `/health` also responds directly to internal health probes.
 
 | Method | Route | Purpose |
 |---|---|---|
@@ -115,14 +113,14 @@ All routes except `/health` require HTTP Basic authentication.
 Example to provision directly:
 
 ```sh
-curl -u admin:'<your admin password>' -H 'Content-Type: application/json' \
+curl -u '<Coolify Basic Auth username>:<Coolify Basic Auth password>' -H 'Content-Type: application/json' \
   -d '{"name":"bookflix"}' https://pgmanager.example.com/api/apps
 ```
 
 Example to attach to a Coolify app:
 
 ```sh
-curl -u admin:'<your admin password>' -H 'Content-Type: application/json' \
+curl -u '<Coolify Basic Auth username>:<Coolify Basic Auth password>' -H 'Content-Type: application/json' \
   -d '{"coolify_app_uuid":"<actual Coolify app UUID>","env_key":"DATABASE_URL","replace_existing":false,"redeploy":true}' \
   https://pgmanager.example.com/api/apps/bookflix/coolify
 ```
@@ -141,8 +139,8 @@ Open `http://127.0.0.1:8000` on the local host. Local Compose intentionally bind
 
 ## Security & operations
 
-- **Highly privileged service:** holds the PostgreSQL admin DSN and a Coolify API token with deployment/environment-variable write access. Keep it behind VPN or strong network allowlisting in addition to HTTPS + HTTP Basic.
-- **Secrets:** passwords are encrypted with Fernet and revealed to authenticated admins on explicit request. Coolify receives an app-specific secret with `is_shown_once=true`. Avoid exposing PostgreSQL admin credentials or the Fernet key to other apps.
+- **Highly privileged service:** holds the PostgreSQL admin DSN and a Coolify API token with deployment/environment-variable write access. FastAPI performs **no authentication**. Require Coolify/Traefik Basic Auth on the public HTTPS route, preferably backed by VPN/IP restrictions. Do not publish container port `8000` or expose untrusted shared Docker networks, because direct network access bypasses the proxy.
+- **Secrets:** passwords are encrypted with Fernet and revealed on explicit request to anyone who can access the API (the proxy must authenticate and restrict those callers). Coolify receives an app-specific secret with `is_shown_once=true`. Avoid exposing PostgreSQL admin credentials or the Fernet key to other apps.
 - **No automatic overwrite:** linking refuses to replace an existing env variable unless explicitly authorized. Syncing the same managed binding is allowed.
 - **Safe rotation order:** when linked, the Coolify variable is updated **before** the PostgreSQL password is changed. A failed PostgreSQL rotation attempts to restore the old URL in Coolify. Watch for any urgent warning and repair manually if recovery fails.
 - **Deploy semantics:** Coolify's API queues deployments. It does not guarantee that the app starts successfully. A link can succeed even if deployment is not queued, and you'll be warned.

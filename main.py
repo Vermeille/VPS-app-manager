@@ -8,14 +8,12 @@ import secrets
 from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated
 from urllib.parse import quote
 
 import psycopg
 from cryptography.fernet import Fernet, InvalidToken
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from psycopg import sql
 from psycopg.rows import dict_row
 from pydantic import BaseModel, Field
@@ -27,20 +25,17 @@ HERE = Path(__file__).resolve().parent
 LOCK_ID = 477_737_942_106  # Serialize all provisioning mutations on this PostgreSQL server.
 
 ADMIN_DSN = os.getenv("POSTGRES_ADMIN_DSN", "")
-ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 APP_DB_HOST = os.getenv("APP_DB_HOST", "")
 APP_DB_PORT = int(os.getenv("APP_DB_PORT", "5432"))
 FERNET_KEY = os.getenv("FERNET_KEY", "")
 
-if not (ADMIN_DSN and ADMIN_PASSWORD and APP_DB_HOST and FERNET_KEY):
+if not (ADMIN_DSN and APP_DB_HOST and FERNET_KEY):
     raise RuntimeError(
-        "Set POSTGRES_ADMIN_DSN, ADMIN_PASSWORD, APP_DB_HOST and FERNET_KEY. "
+        "Set POSTGRES_ADMIN_DSN, APP_DB_HOST and FERNET_KEY. "
         "See README.md."
     )
 
 cipher = Fernet(FERNET_KEY.encode())
-security = HTTPBasic()
 
 
 class AppCreate(BaseModel):
@@ -84,26 +79,6 @@ class AppCredentials(AppInfo):
     port: int
     warning: str | None = None
     redeploy_requested: bool = False
-
-
-def authenticate(
-    credentials: Annotated[HTTPBasicCredentials, Depends(security)],
-) -> None:
-    valid_user = secrets.compare_digest(
-        credentials.username.encode(), ADMIN_USERNAME.encode()
-    )
-    valid_password = secrets.compare_digest(
-        credentials.password.encode(), ADMIN_PASSWORD.encode()
-    )
-    if not (valid_user and valid_password):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials",
-            headers={"WWW-Authenticate": 'Basic realm="PG App Manager"'},
-        )
-
-
-Auth = Annotated[None, Depends(authenticate)]
 
 
 @contextmanager
@@ -206,7 +181,7 @@ app = FastAPI(
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
-    # JSON API is same-origin and requires credentials on every request.
+    # JSON API is same-origin; authentication is enforced at the reverse proxy.
     if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
         origin = request.headers.get("origin")
         if origin:
@@ -234,22 +209,22 @@ def health():
 
 
 @app.get("/", include_in_schema=False)
-def home(_auth: Auth):
+def home():
     return FileResponse(HERE / "static" / "index.html")
 
 
 @app.get("/app.js", include_in_schema=False)
-def js(_auth: Auth):
+def js():
     return FileResponse(HERE / "static" / "app.js", media_type="text/javascript")
 
 
 @app.get("/style.css", include_in_schema=False)
-def styles(_auth: Auth):
+def styles():
     return FileResponse(HERE / "static" / "style.css", media_type="text/css")
 
 
 @app.get("/api/apps", response_model=list[AppInfo])
-def list_apps(_auth: Auth):
+def list_apps():
     try:
         with admin_connection() as conn:
             rows = conn.execute(
@@ -263,12 +238,12 @@ def list_apps(_auth: Auth):
 
 
 @app.get("/api/coolify/status")
-def coolify_status(_auth: Auth):
+def coolify_status():
     return {"configured": coolify_configured()}
 
 
 @app.get("/api/coolify/applications")
-def list_coolify_apps(_auth: Auth):
+def list_coolify_apps():
     try:
         with CoolifyClient() as client:
             return client.applications()
@@ -277,7 +252,7 @@ def list_coolify_apps(_auth: Auth):
 
 
 @app.post("/api/apps/{name}/coolify")
-def link_coolify(name: str, payload: CoolifyLink, _auth: Auth):
+def link_coolify(name: str, payload: CoolifyLink):
     try:
         with admin_connection(lock=True) as conn:
             row = require_managed(conn, name)
@@ -326,7 +301,7 @@ def link_coolify(name: str, payload: CoolifyLink, _auth: Auth):
 
 
 @app.post("/api/apps/{name}/coolify/unlink")
-def unlink_coolify(name: str, payload: CoolifyUnlink, _auth: Auth):
+def unlink_coolify(name: str, payload: CoolifyUnlink):
     if payload.redeploy and not payload.remove_env:
         raise HTTPException(400, "Redeploy requires removing the managed environment variable")
     try:
@@ -367,7 +342,7 @@ def unlink_coolify(name: str, payload: CoolifyUnlink, _auth: Auth):
 
 
 @app.post("/api/apps", response_model=AppCredentials, status_code=201)
-def create_app(payload: AppCreate, _auth: Auth):
+def create_app(payload: AppCreate):
     name = payload.name
     db_name, username = db_names(name)
     password = secrets.token_urlsafe(32)
@@ -440,7 +415,7 @@ def create_app(payload: AppCreate, _auth: Auth):
 
 
 @app.get("/api/apps/{name}/credentials", response_model=AppCredentials)
-def reveal_credentials(name: str, _auth: Auth):
+def reveal_credentials(name: str):
     try:
         with admin_connection() as conn:
             row = require_managed(conn, name)
@@ -453,7 +428,7 @@ def reveal_credentials(name: str, _auth: Auth):
 
 
 @app.post("/api/apps/{name}/rotate", response_model=AppCredentials)
-def rotate_password(name: str, _auth: Auth):
+def rotate_password(name: str):
     new_password = secrets.token_urlsafe(32)
     encrypted = cipher.encrypt(new_password.encode()).decode()
     try:
@@ -521,7 +496,7 @@ def rotate_password(name: str, _auth: Auth):
 
 
 @app.delete("/api/apps/{name}")
-def delete_app(name: str, payload: DeleteConfirmation, _auth: Auth):
+def delete_app(name: str, payload: DeleteConfirmation):
     if payload.confirm != name:
         raise HTTPException(status_code=400, detail="Confirmation does not match app name")
     try:
